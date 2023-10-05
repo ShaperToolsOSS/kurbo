@@ -28,3 +28,4 @@ features = ["derive"]
 # This is used for research but not really needed; maybe refactor.
 [dev-dependencies]
 rand = "0.7.2"
+float-cmp = "0.8.0"

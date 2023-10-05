@@ -200,7 +200,6 @@ impl BezPath {
 
                     match Arc::from_svg_arc(&svg_arc) {
                         Some(arc) => {
-                            // TODO: consider making tolerance configurable
                             arc.to_cubic_beziers(0.1, |p1, p2, p3| {
                                 path.curve_to(p1, p2, p3);
                             });
@@ -390,6 +389,58 @@ impl SvgArc {
     pub fn is_straight_line(&self) -> bool {
         self.radii.x.abs() <= 1e-5 || self.radii.y.abs() <= 1e-5 || self.from == self.to
     }
+    /// Creates a 'SvgArc' from an 'Arc'.
+    ///
+    /// SVG represents elliptical arcs using endpoint parameterization, while kurbo uses a centerpoint parameterization.
+    ///
+    /// Conversion between these representations is described at https://www.w3.org/TR/SVG/implnote.html#ArcImplementationNotes
+
+    pub fn from_arc(arc: &Arc) -> SvgArc {
+        let xr = arc.x_rotation % (2.0 * PI);
+        let cos_phi = xr.cos();
+        let sin_phi = xr.sin();
+
+        let theta1 = arc.start_angle % (2.0 * PI);
+        let cos_theta1 = theta1.cos();
+        let sin_theta1 = theta1.sin();
+
+        let theta2 = (arc.start_angle + arc.sweep_angle) % (2.0 * PI);
+        let cos_theta2 = theta2.cos();
+        let sin_theta2 = theta2.sin();
+
+        let rx = arc.radii.x.abs();
+        let ry = arc.radii.y.abs();
+
+        let cx = arc.center.x.abs();
+        let cy = arc.center.y.abs();
+
+        let x_start = rx * cos_theta1 * cos_phi - ry * sin_theta1 * sin_phi + cx;
+        let y_start = rx * cos_theta1 * sin_phi + ry * sin_theta1 * cos_phi + cy;
+
+        let x_end = rx * cos_theta2 * cos_phi - ry * sin_theta2 * sin_phi + cx;
+        let y_end = rx * cos_theta2 * sin_phi + ry * sin_theta2 * cos_phi + cy;
+
+        let fa = if arc.sweep_angle.abs() > PI {
+            true
+        } else {
+            false
+        };
+
+        let fs = if arc.sweep_angle > 0.0 {
+            true
+        } else {
+            false
+        };
+
+        SvgArc {
+            from: Point::new(x_start, y_start),
+            to: Point::new(x_end, y_end),
+            radii: Vec2::new(rx, ry),
+            x_rotation: arc.x_rotation,
+            large_arc: fa,
+            sweep: fs,
+        }
+    }
 }
 
 impl Arc {
@@ -480,7 +531,9 @@ impl Arc {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BezPath, CubicBez, Line, ParamCurve, PathSeg, Point, QuadBez, Shape};
+    use crate::{BezPath, CubicBez, Line, ParamCurve, PathSeg, Point, QuadBez, Shape, Arc, SvgArc, Vec2};
+    use float_cmp::approx_eq;
+
 
     #[test]
     fn test_parse_svg() {
@@ -633,5 +686,49 @@ mod tests {
 
             assert_eq!(vec, deser_vec);
         }
+    }
+
+    #[test]
+    fn test_arc_to_svg_arc() {
+        //Example arc params
+        //<path d="M 172.55 152.45 A 30 50 -45 0 1 215.1 109.9"/>
+
+        let input_arc = SvgArc {
+            from: Point::new(25., 25.),
+            to: Point::new(60.35533, 60.35533),
+            radii: Vec2::new(25., 50.),
+            x_rotation: -45. / 180. *  std::f64::consts::PI,
+            large_arc: false,
+            sweep: true,
+        };
+
+        //Convert to Arc and back to SVG Arc
+        let output_arc = SvgArc::from_arc(&Arc::from_svg_arc(&input_arc).unwrap());
+
+        assert!(
+            approx_eq!(f64, input_arc.from.x, output_arc.from.x) && 
+            approx_eq!(f64, input_arc.from.y, output_arc.from.y ),
+            "from doesn't match: {},{}", input_arc.from, output_arc.from
+        );
+
+        assert!(
+            approx_eq!(f64, input_arc.to.x, output_arc.to.x) && 
+            approx_eq!(f64, input_arc.to.y, output_arc.to.y),
+            "to doesn't match: {},{}", input_arc.to, output_arc.to
+        );
+
+        assert!(
+            approx_eq!(f64, input_arc.radii.x, output_arc.radii.x) && 
+            approx_eq!(f64, input_arc.radii.y, output_arc.radii.y),
+            "radii doesn't match: {},{} \n Have radii been resized to fit endpoints?", input_arc.radii, output_arc.radii
+
+        );
+
+        assert!(approx_eq!(f64, input_arc.x_rotation, output_arc.x_rotation), "x_rotation doesn't match: {},{}", input_arc.x_rotation, output_arc.x_rotation);
+
+        assert!(input_arc.large_arc == output_arc.large_arc, "large_arc doesn't match: {},{}", input_arc.large_arc, output_arc.large_arc);
+
+        assert!(input_arc.sweep == output_arc.sweep, "sweep doesn't match: {},{}", input_arc.sweep, output_arc.sweep );
+
     }
 }
